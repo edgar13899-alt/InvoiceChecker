@@ -9,8 +9,7 @@ st.set_page_config(page_title="Invoice Price Checker", layout="wide")
 st.title("🧾 Invoice Price Checker")
 st.markdown("Upload your master price list (Excel) and a recent invoice to detect price changes.")
 
-# API Key Input
-api_key = st.text_input("Enter your Google AI Studio API Key:", type="password")
+
 
 col1, col2 = st.columns(2)
 
@@ -20,8 +19,14 @@ with col1:
 with col2:
     invoice_file = st.file_uploader("2. Upload Invoice Document", type=["png", "jpg", "jpeg", "pdf"])
 
-if st.button("Compare Prices") and excel_file and invoice_file and api_key:
+if st.button("Compare Prices") and excel_file and invoice_file:
     try:
+        # Fetch the key from the hidden vault
+        api_key = st.secrets["GOOGLE_API_KEY"]
+
+        # Configure Google AI Studio API
+        genai.configure(api_key=api_key)
+        
         # Configure Google AI Studio API
         genai.configure(api_key=api_key)
         
