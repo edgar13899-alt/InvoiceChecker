@@ -3,76 +3,127 @@ import pandas as pd
 import vertexai
 from vertexai.generative_models import GenerativeModel, Part
 from google.oauth2 import service_account
+from google.cloud import firestore
 import json
-import os
 
 # Set up the look of the web app
-st.set_page_config(page_title="Invoice Price Checker", layout="wide")
-st.title("🧾 Invoice Price Checker (Enterprise Edition)")
-st.markdown("Powered by Google Cloud Vertex AI and Gemini 3")
+st.set_page_config(page_title="Invoice Database Tracker", layout="wide")
+st.title("🧾 Smart Invoice Tracker (Firestore Edition)")
+st.markdown("Upload a new invoice. The app will check your database for the last price you paid.")
 
-col1, col2 = st.columns(2)
+# 1. Connect to Google Cloud (Both AI and Database)
+@st.cache_resource
+def setup_cloud_connections():
+    key_dict = json.loads(st.secrets["GCP_KEY"])
+    credentials = service_account.Credentials.from_service_account_info(key_dict)
+    project_id = st.secrets["GCP_PROJECT"]
+    
+    # Connect Vertex AI
+    vertexai.init(project=project_id, location="us-central1", credentials=credentials)
+    
+    # Connect Firestore Database
+    db = firestore.Client(project=project_id, credentials=credentials)
+    return db
 
-with col1:
-    excel_file = st.file_uploader("1. Upload Excel Price List (.xlsx)", type=["xlsx"])
+db = setup_cloud_connections()
 
-with col2:
-    invoice_file = st.file_uploader("2. Upload Invoice Document", type=["png", "jpg", "jpeg", "pdf"])
+# 2. File Upload (Only need the invoice now!)
+invoice_file = st.file_uploader("Upload Invoice Document", type=["png", "jpg", "jpeg", "pdf"])
 
-if st.button("Compare Prices") and excel_file and invoice_file:
+if st.button("Process Invoice") and invoice_file:
     try:
-        # 1. Unpack the JSON key using the apostrophe trick
-        key_dict = json.loads(st.secrets["GCP_KEY"])
-        credentials = service_account.Credentials.from_service_account_info(key_dict)
-        
-        # 2. Connect to the Enterprise Highway
-        project_id = st.secrets["GCP_PROJECT"]
-        vertexai.init(project=project_id, location="us-central1", credentials=credentials)
-        
-        # 3. Load Excel data
-        df = pd.read_excel(excel_file)
-        price_list_text = df.to_csv(index=False)
-        
-        # 4. Read the uploaded invoice directly from memory
         document_part = Part.from_data(data=invoice_file.getvalue(), mime_type=invoice_file.type)
-        
-        # 5. Initialize Gemini 3 
         model = GenerativeModel('gemini-3.0-pro')
         
-        prompt = f"""
-        You are an expert accountant and data analyst. 
-        I am providing you with a Master Price List (in CSV format) and an uploaded Invoice document.
-        
-        Master Price List:
-        {price_list_text}
-        
-        Task:
-        1. Extract the line items and their unit prices from the attached Invoice.
-        2. Match each extracted item from the invoice to the most likely corresponding item in the Master Price List.
-        3. Compare the 'Invoice Unit Price' to the 'Master Price'.
-        4. Return ONLY a valid JSON array of objects with the following exact keys:
-           - "Invoice_Item_Name": The name exactly as it appears on the invoice.
-           - "Matched_Master_Item": The matched name from the master price list.
-           - "Invoice_Price": The unit price on the invoice (number only).
-           - "Master_Price": The unit price from the master list (number only).
-           - "Price_Change": The difference (Invoice_Price minus Master_Price).
-           - "Status": Use ONLY "Increased", "Decreased", or "Unchanged".
+        prompt = """
+        You are an expert accountant. Read this invoice carefully.
+        1. Identify the name of the Vendor/Supplier.
+        2. Extract the line items and their unit prices.
+        3. Return ONLY a valid JSON object with the following structure:
+        {
+            "Vendor_Name": "Name of the company",
+            "Items": [
+                {
+                    "Item_Name": "Exact name on invoice",
+                    "New_Price": 12.50
+                }
+            ]
+        }
         """
         
-        with st.spinner("Enterprise AI is analyzing the invoice..."):
+        with st.spinner("AI is reading the invoice and checking the database..."):
             response = model.generate_content([document_part, prompt])
-            
             result_text = response.text.replace('```json', '').replace('```', '').strip()
-            result_data = json.loads(result_text)
-            result_df = pd.DataFrame(result_data)
+            invoice_data = json.loads(result_text)
             
-            st.success("Comparison Complete!")
+            vendor_name = invoice_data["Vendor_Name"]
+            st.subheader(f"🏢 Vendor: {vendor_name}")
+            
+            comparison_results = []
+            
+            # 3. Check the Database for each item
+            for item in invoice_data["Items"]:
+                item_name = item["Item_Name"]
+                new_price = float(item["New_Price"])
+                
+                # Look inside Firestore for this specific vendor and item
+                doc_ref = db.collection("vendor_prices").document(f"{vendor_name}_{item_name}")
+                doc = doc_ref.get()
+                
+                if doc.exists:
+                    last_price = doc.to_dict().get("last_price")
+                    price_change = new_price - last_price
+                    if price_change > 0:
+                        status = "Increased"
+                    elif price_change < 0:
+                        status = "Decreased"
+                    else:
+                        status = "Unchanged"
+                else:
+                    last_price = "No History"
+                    price_change = "N/A"
+                    status = "New Item"
+                
+                comparison_results.append({
+                    "Item": item_name,
+                    "Last Paid Price": last_price,
+                    "New Invoice Price": new_price,
+                    "Difference": price_change,
+                    "Status": status
+                })
+            
+            # Display the results
+            result_df = pd.DataFrame(comparison_results)
             
             def highlight_increases(val):
-                color = '#ff9999' if val == 'Increased' else ''
-                return f'background-color: {color}'
-            
+                if val == 'Increased': return 'background-color: #ff9999'
+                elif val == 'Decreased': return 'background-color: #99ff99'
+                elif val == 'New Item': return 'background-color: #ffff99'
+                return ''
+                
             st.dataframe(result_df.style.map(highlight_increases, subset=['Status']), use_container_width=True)
+            
+            # Save the new data temporarily so we can update the database if the user approves
+            st.session_state['ready_to_save'] = invoice_data
 
     except Exception as e:
         st.error(f"An error occurred: {e}")
+
+# 4. The "Memory" Button
+if 'ready_to_save' in st.session_state:
+    st.warning("Please review the prices above. If everything looks correct, save them to the database for next time.")
+    if st.button("💾 Save New Prices to Database"):
+        vendor_name = st.session_state['ready_to_save']["Vendor_Name"]
+        with st.spinner("Saving to enterprise database..."):
+            for item in st.session_state['ready_to_save']["Items"]:
+                item_name = item["Item_Name"]
+                new_price = float(item["New_Price"])
+                
+                # Write the new price into Firestore
+                db.collection("vendor_prices").document(f"{vendor_name}_{item_name}").set({
+                    "vendor": vendor_name,
+                    "item": item_name,
+                    "last_price": new_price
+                })
+        st.success("Prices securely saved! The app will remember these for the next invoice.")
+        del st.session_state['ready_to_save'] # Clear the state
