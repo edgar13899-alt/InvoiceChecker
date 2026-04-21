@@ -62,7 +62,11 @@ if st.button("Process Invoice") and invoice_file:
             )
         )
         
-        prompt = "Read this invoice and extract the vendor name and every line item with its unit price."
+        prompt = """
+        Read this invoice and extract the vendor name and every line item with its unit price.
+        IMPORTANT: For the 'Item_Name', you MUST combine the Description and the Size so that items with the same name but different sizes are completely unique. 
+        For example, output 'FOCA LIQUID LAUNDRY 240 F' and 'FOCA LIQUID LAUNDRY 128 F'.
+        """
         
         with st.spinner("AI is reading the invoice and checking the database..."):
             response = model.generate_content([document_part, prompt])
