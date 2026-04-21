@@ -119,14 +119,16 @@ if st.button("Process Invoice") and invoice_file:
 if 'ready_to_save' in st.session_state:
     st.warning("Please review the prices above. If everything looks correct, save them to the database for next time.")
     if st.button("💾 Save New Prices to Database"):
-        vendor_name = st.session_state['ready_to_save']["Vendor_Name"]
+        # Clean the vendor name again
+        vendor_name = st.session_state['ready_to_save']["Vendor_Name"].replace("/", "-")
         with st.spinner("Saving to enterprise database..."):
             for item in st.session_state['ready_to_save']["Items"]:
-                item_name = item["Item_Name"]
+                # Clean the item name again
+                item_name = item["Item_Name"].replace("/", "-")
                 new_price = float(item["New_Price"])
                 
-                # Write the new price into Firestore
-                db.collection("vendor_prices").document(f"{vendor_name}_{item_name}").set({
+                doc_id = f"{vendor_name}_{item_name}"
+                db.collection("vendor_prices").document(doc_id).set({
                     "vendor": vendor_name,
                     "item": item_name,
                     "last_price": new_price
