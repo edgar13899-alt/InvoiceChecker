@@ -22,7 +22,7 @@ def setup_cloud_connections():
     vertexai.init(project=project_id, location="global", credentials=credentials)
     
     # Connect Firestore Database
-    db = firestore.Client(project=project_id, credentials=credentials)
+    db = firestore.Client(project=project_id, credentials=credentials, database="lavaquitainvoices")
     return db
 
 db = setup_cloud_connections()
