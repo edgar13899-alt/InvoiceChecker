@@ -56,19 +56,25 @@ if st.button("Process Invoice") and invoice_file:
             result_text = response.text.replace('```json', '').replace('```', '').strip()
             invoice_data = json.loads(result_text)
             
-            vendor_name = invoice_data["Vendor_Name"]
+            # Clean the vendor name so it doesn't have slashes
+            vendor_name = invoice_data["Vendor_Name"].replace("/", "-")
             st.subheader(f"🏢 Vendor: {vendor_name}")
             
             comparison_results = []
             
-            # 3. Check the Database for each item
             for item in invoice_data["Items"]:
-                item_name = item["Item_Name"]
+                # Clean the item name so it doesn't have slashes
+                item_name = item["Item_Name"].replace("/", "-")
                 new_price = float(item["New_Price"])
                 
-                # Look inside Firestore for this specific vendor and item
-                doc_ref = db.collection("vendor_prices").document(f"{vendor_name}_{item_name}")
+                # Create a safe ID for the document
+                doc_id = f"{vendor_name}_{item_name}"
+                
+                # Look inside Firestore
+                doc_ref = db.collection("vendor_prices").document(doc_id)
                 doc = doc_ref.get()
+                
+                # ... (the rest of your logic follows)
                 
                 if doc.exists:
                     last_price = doc.to_dict().get("last_price")
