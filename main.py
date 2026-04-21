@@ -6,36 +6,35 @@ from google.oauth2 import service_account
 from google.cloud import firestore
 import json
 
-# --- 1. APP CONFIGURATION ---
-st.set_page_config(page_title="La Vaquita Invoice Tracker", layout="wide", page_icon="🧾")
-st.title("🧾 La Vaquita: Smart Invoice Tracker")
-st.markdown("### Powered by Gemini 3.1 Pro & Firestore")
-st.info("Upload a new vendor invoice. The AI will read it and compare prices against your previous history.")
+# Set up the look of the web app
+st.set_page_config(page_title="Invoice Database Tracker", layout="wide")
+st.title("🧾 Smart Invoice Tracker (Firestore Edition)")
+st.markdown("Upload a new invoice. The app will check your database for the last price you paid.")
 
-# --- 2. SECURE CONNECTIONS ---
+# 1. Connect to Google Cloud (Both AI and Database)
 @st.cache_resource
-def setup_enterprise_connections():
-    # Load your secret JSON badge from the Streamlit vault
+def setup_cloud_connections():
     key_dict = json.loads(st.secrets["GCP_KEY"])
     credentials = service_account.Credentials.from_service_account_info(key_dict)
     project_id = st.secrets["GCP_PROJECT"]
     
-    # 3.1 Pro Preview requires the 'global' location endpoint
+    # Connect Vertex AI
     vertexai.init(project=project_id, location="global", credentials=credentials)
     
-    # Connect to your Firestore 'default' database
-    db = firestore.Client(project=project_id, credentials=credentials)
+    # Connect Firestore Database
+    db = firestore.Client(project=project_id, credentials=credentials, database="lavaquitainvoices")
     return db
 
-db = setup_enterprise_connections()
+db = setup_cloud_connections()
 
-# --- 3. FILE UPLOADER ---
-invoice_file = st.file_uploader("Upload Invoice (Digital PDF is best, or clear Image)", type=["png", "jpg", "jpeg", "pdf"])
+# 2. File Upload (Only need the invoice now!)
+invoice_file = st.file_uploader("Upload Invoice Document", type=["png", "jpg", "jpeg", "pdf"])
 
-if st.button("🚀 Process Invoice") and invoice_file:
+if st.button("Process Invoice") and invoice_file:
     try:
-        # --- THE BULLETPROOF TEMPLATE (SCHEMA) ---
-        # This locks the AI into using only the names we want
+        document_part = Part.from_data(data=invoice_file.getvalue(), mime_type=invoice_file.type)
+        
+        # --- APPLIED FIX: Added Schema to prevent KeyError and JSON formatting errors ---
         response_schema = {
             "type": "OBJECT",
             "properties": {
@@ -54,101 +53,98 @@ if st.button("🚀 Process Invoice") and invoice_file:
             },
             "required": ["Vendor_Name", "Items"]
         }
-
-        # --- AI GENERATION CONFIG ---
-        model = GenerativeModel('gemini-3.1-pro-preview')
-        config = GenerationConfig(
-            response_mime_type="application/json",
-            response_schema=response_schema
+        
+        model = GenerativeModel(
+            'gemini-3.1-pro-preview',
+            generation_config=GenerationConfig(
+                response_mime_type="application/json",
+                response_schema=response_schema
+            )
         )
         
-        prompt = "Extract the vendor name and every line item with its individual unit price from this invoice."
-
-        with st.spinner("Gemini 3.1 is analyzing the document..."):
-            # Prepare the file for the AI
-            document_part = Part.from_data(data=invoice_file.getvalue(), mime_type=invoice_file.type)
-            
-            # Send to the global engine
-            response = model.generate_content([document_part, prompt], generation_config=config)
-            
-            # Convert text response to usable Python data
+        prompt = "Read this invoice and extract the vendor name and every line item with its unit price."
+        
+        with st.spinner("AI is reading the invoice and checking the database..."):
+            response = model.generate_content([document_part, prompt])
+            # The schema ensures the output is clean JSON, no string replacement needed
             invoice_data = json.loads(response.text)
             
-            # Clean vendor name for the database path (No slashes allowed!)
-            vendor_name = invoice_data["Vendor_Name"].replace("/", "-").strip()
+            # Clean the vendor name so it doesn't have slashes
+            vendor_name = invoice_data["Vendor_Name"].replace("/", "-")
             st.subheader(f"🏢 Vendor: {vendor_name}")
             
             comparison_results = []
             
-            # --- DATABASE CHECKING LOOP ---
             for item in invoice_data["Items"]:
-                # Clean item name for the path
-                item_name = item["Item_Name"].replace("/", "-").strip()
+                # Clean the item name so it doesn't have slashes
+                item_name = item["Item_Name"].replace("/", "-")
                 new_price = float(item["New_Price"])
                 
-                # Create the unique ID: Vendor_Item
+                # Create a safe ID for the document
                 doc_id = f"{vendor_name}_{item_name}"
+                
+                # Look inside Firestore
                 doc_ref = db.collection("vendor_prices").document(doc_id)
                 doc = doc_ref.get()
+                
+                # ... (the rest of your logic follows)
                 
                 if doc.exists:
                     last_price = doc.to_dict().get("last_price")
                     price_change = new_price - last_price
-                    
-                    if price_change > 0: status = "Increased"
-                    elif price_change < 0: status = "Decreased"
-                    else: status = "Unchanged"
+                    if price_change > 0:
+                        status = "Increased"
+                    elif price_change < 0:
+                        status = "Decreased"
+                    else:
+                        status = "Unchanged"
                 else:
                     last_price = "No History"
-                    price_change = 0
+                    price_change = "N/A"
                     status = "New Item"
                 
                 comparison_results.append({
                     "Item": item_name,
                     "Last Paid Price": last_price,
                     "New Invoice Price": new_price,
-                    "Difference": round(price_change, 2),
+                    "Difference": price_change,
                     "Status": status
                 })
             
-            # --- DISPLAY RESULTS ---
-            df = pd.DataFrame(comparison_results)
+            # Display the results
+            result_df = pd.DataFrame(comparison_results)
             
-            def color_status(val):
-                if val == 'Increased': return 'background-color: #ffcccc' # Red
-                if val == 'Decreased': return 'background-color: #ccffcc' # Green
-                if val == 'New Item': return 'background-color: #ffffcc' # Yellow
+            def highlight_increases(val):
+                if val == 'Increased': return 'background-color: #ff9999'
+                elif val == 'Decreased': return 'background-color: #99ff99'
+                elif val == 'New Item': return 'background-color: #ffff99'
                 return ''
-
-            st.dataframe(df.style.map(color_status, subset=['Status']), use_container_width=True)
+                
+            st.dataframe(result_df.style.map(highlight_increases, subset=['Status']), use_container_width=True)
             
-            # Temporarily hold the data in the app's memory
-            st.session_state['pending_invoice'] = invoice_data
+            # Save the new data temporarily so we can update the database if the user approves
+            st.session_state['ready_to_save'] = invoice_data
 
     except Exception as e:
-        st.error(f"Something went wrong: {e}")
+        st.error(f"An error occurred: {e}")
 
-# --- 4. THE SAVE BUTTON (PERMANENT MEMORY) ---
-if 'pending_invoice' in st.session_state:
-    st.divider()
-    st.warning("Review the prices above. Clicking save will update your database for future comparisons.")
-    
-    if st.button("💾 Save to Enterprise Database"):
-        data = st.session_state['pending_invoice']
-        v_name = data["Vendor_Name"].replace("/", "-").strip()
-        
-        with st.spinner(f"Saving {len(data['Items'])} items..."):
-            for itm in data["Items"]:
-                i_name = itm["Item_Name"].replace("/", "-").strip()
-                n_price = float(itm["New_Price"])
+# 4. The "Memory" Button
+if 'ready_to_save' in st.session_state:
+    st.warning("Please review the prices above. If everything looks correct, save them to the database for next time.")
+    if st.button("💾 Save New Prices to Database"):
+        # Clean the vendor name again
+        vendor_name = st.session_state['ready_to_save']["Vendor_Name"].replace("/", "-")
+        with st.spinner("Saving to enterprise database..."):
+            for item in st.session_state['ready_to_save']["Items"]:
+                # Clean the item name again
+                item_name = item["Item_Name"].replace("/", "-")
+                new_price = float(item["New_Price"])
                 
-                # Write to Firestore
-                db.collection("vendor_prices").document(f"{v_name}_{i_name}").set({
-                    "vendor": v_name,
-                    "item": i_name,
-                    "last_price": n_price
+                doc_id = f"{vendor_name}_{item_name}"
+                db.collection("vendor_prices").document(doc_id).set({
+                    "vendor": vendor_name,
+                    "item": item_name,
+                    "last_price": new_price
                 })
-                
-        st.success(f"Prices for {v_name} have been updated successfully!")
-        # Clear the memory so it doesn't show the button again
-        del st.session_state['pending_invoice']
+        st.success("Prices securely saved! The app will remember these for the next invoice.")
+        del st.session_state['ready_to_save'] # Clear the state
