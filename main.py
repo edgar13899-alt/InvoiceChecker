@@ -51,15 +51,34 @@ if st.button("Process Invoice") and invoice_file:
         }
         """
         
-        with st.spinner("AI is reading the invoice and checking the database..."):
+        with st.spinner("AI is reading the invoice..."):
             response = model.generate_content([document_part, prompt])
-            result_text = response.text.replace('```json', '').replace('```', '').strip()
-            invoice_data = json.loads(result_text)
+            raw_text = response.text
             
-            # Clean the vendor name so it doesn't have slashes
+            # --- NEW ERROR-PROOF LOGIC START ---
+            try:
+                # 1. Find the first '{' and last '}' to ignore any extra "chat" the AI added
+                start = raw_text.find('{')
+                end = raw_text.rfind('}') + 1
+                clean_json = raw_text[start:end]
+                
+                # 2. Fix the most common AI mistake: single quotes instead of double quotes
+                # (This is often what causes the "enclosed in double quotes" error)
+                invoice_data = json.loads(clean_json)
+                
+            except json.JSONDecodeError:
+                # 3. If it still fails, try a "Deep Clean" for quotes
+                import re
+                # This fixes keys that are missing quotes or have single quotes
+                fixed_json = re.sub(r"([{,])\s*([^'\"\[\]{}]+)\s*:", r'\1"\2":', clean_json)
+                fixed_json = fixed_json.replace("'", '"')
+                invoice_data = json.loads(fixed_json)
+            # --- NEW ERROR-PROOF LOGIC END ---
+
             vendor_name = invoice_data["Vendor_Name"].replace("/", "-")
             st.subheader(f"🏢 Vendor: {vendor_name}")
             
+            # ... (The rest of the items loop stays the same)
             comparison_results = []
             
             for item in invoice_data["Items"]:
