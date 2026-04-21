@@ -19,7 +19,7 @@ def setup_cloud_connections():
     project_id = st.secrets["GCP_PROJECT"]
     
     # Connect Vertex AI
-    vertexai.init(project=project_id, location="us-central1", credentials=credentials)
+    vertexai.init(project=project_id, location="global", credentials=credentials)
     
     # Connect Firestore Database
     db = firestore.Client(project=project_id, credentials=credentials)
