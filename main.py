@@ -1,15 +1,15 @@
 import streamlit as st
 import pandas as pd
-import google.generativeai as genai
+import vertexai
+from vertexai.generative_models import GenerativeModel, Part
+from google.oauth2 import service_account
 import json
 import os
 
 # Set up the look of the web app
 st.set_page_config(page_title="Invoice Price Checker", layout="wide")
-st.title("🧾 Invoice Price Checker")
-st.markdown("Upload your master price list (Excel) and a recent invoice to detect price changes.")
-
-
+st.title("🧾 Invoice Price Checker (Enterprise Edition)")
+st.markdown("Powered by Google Cloud Vertex AI and Gemini 3")
 
 col1, col2 = st.columns(2)
 
@@ -21,33 +21,24 @@ with col2:
 
 if st.button("Compare Prices") and excel_file and invoice_file:
     try:
-        # Fetch the key from the hidden vault
-        api_key = st.secrets["GOOGLE_API_KEY"]
-
-        # Configure Google AI Studio API
-        genai.configure(api_key=api_key)
+        # 1. Unpack the JSON key using the apostrophe trick
+        key_dict = json.loads(st.secrets["GCP_KEY"])
+        credentials = service_account.Credentials.from_service_account_info(key_dict)
         
-        # Configure Google AI Studio API
-        genai.configure(api_key=api_key)
+        # 2. Connect to the Enterprise Highway
+        project_id = st.secrets["GCP_PROJECT"]
+        vertexai.init(project=project_id, location="us-central1", credentials=credentials)
         
-        # Load Excel data into a DataFrame
+        # 3. Load Excel data
         df = pd.read_excel(excel_file)
-        
-        # Convert Excel data to a text format the AI can easily read
         price_list_text = df.to_csv(index=False)
         
-        # Save the uploaded invoice temporarily so Gemini can process it
-        temp_file_path = f"temp_{invoice_file.name}"
-        with open(temp_file_path, "wb") as f:
-            f.write(invoice_file.getbuffer())
+        # 4. Read the uploaded invoice directly from memory
+        document_part = Part.from_data(data=invoice_file.getvalue(), mime_type=invoice_file.type)
         
-        # Upload the file to Google's servers for processing
-        uploaded_gemini_file = genai.upload_file(temp_file_path)
+        # 5. Initialize Gemini 3 
+        model = GenerativeModel('gemini-3.0-pro')
         
-        # Use Gemini 1.5 Pro for high-accuracy document parsing
-        model = genai.GenerativeModel('gemini-1.5-pro')
-        
-        # Give the AI its instructions
         prompt = f"""
         You are an expert accountant and data analyst. 
         I am providing you with a Master Price List (in CSV format) and an uploaded Invoice document.
@@ -68,29 +59,20 @@ if st.button("Compare Prices") and excel_file and invoice_file:
            - "Status": Use ONLY "Increased", "Decreased", or "Unchanged".
         """
         
-        with st.spinner("AI is analyzing the invoice and comparing prices..."):
-            # Send the image/PDF and the prompt to Gemini
-            response = model.generate_content([uploaded_gemini_file, prompt])
+        with st.spinner("Enterprise AI is analyzing the invoice..."):
+            response = model.generate_content([document_part, prompt])
             
-            # Clean up the AI's response to extract just the JSON data
             result_text = response.text.replace('```json', '').replace('```', '').strip()
             result_data = json.loads(result_text)
-            
-            # Convert the JSON data into a neat table
             result_df = pd.DataFrame(result_data)
             
             st.success("Comparison Complete!")
             
-            # Create a function to highlight price increases in red for quick visibility
             def highlight_increases(val):
                 color = '#ff9999' if val == 'Increased' else ''
                 return f'background-color: {color}'
             
-            # Display the interactive table
             st.dataframe(result_df.style.map(highlight_increases, subset=['Status']), use_container_width=True)
-            
-        # Clean up the temporary file
-        os.remove(temp_file_path)
 
     except Exception as e:
         st.error(f"An error occurred: {e}")
