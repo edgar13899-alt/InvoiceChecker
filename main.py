@@ -33,7 +33,7 @@ invoice_file = st.file_uploader("Upload Invoice Document", type=["png", "jpg", "
 if st.button("Process Invoice") and invoice_file:
     try:
         document_part = Part.from_data(data=invoice_file.getvalue(), mime_type=invoice_file.type)
-        model = GenerativeModel('gemini-3.0-pro')
+        model = GenerativeModel('gemini-3.1-pro-preview')
         
         prompt = """
         You are an expert accountant. Read this invoice carefully.
