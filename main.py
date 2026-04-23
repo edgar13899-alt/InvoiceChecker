@@ -8,7 +8,7 @@ import json
 
 # Set up the look of the web app
 st.set_page_config(page_title="Invoice Database Tracker", layout="wide")
-st.title("🧾 La Vaquita Invoice Checker")
+st.title("La Vaquita Invoice Checker")
 st.markdown("Upload a new invoice. The app will check your database for the last price you paid.")
 
 # 1. Connect to Google Cloud (Both AI and Database)
