@@ -115,40 +115,58 @@ if st.button("Process Invoice") and invoice_file:
                     "Status": status
                 })
             
-            # Display the results
-            result_df = pd.DataFrame(comparison_results)
+            # --- DISPLAY RESULTS (INTERACTIVE) ---
+            df = pd.DataFrame(comparison_results)
             
-            def highlight_increases(val):
-                if val == 'Increased': return 'background-color: #ff9999'
-                elif val == 'Decreased': return 'background-color: #99ff99'
-                elif val == 'New Item': return 'background-color: #ffff99'
+            def color_status(val):
+                if val == 'Increased': return 'background-color: #ffcccc'
+                if val == 'Decreased': return 'background-color: #ccffcc'
+                if val == 'New Item': return 'background-color: #ffffcc'
                 return ''
-                
-            st.dataframe(result_df.style.map(highlight_increases, subset=['Status']), use_container_width=True)
+
+            st.markdown("### 📝 Review and Edit")
+            st.info("If a price is incorrect due to a vendor change or AI error, click the number in the 'New Invoice Price' column to fix it before saving.")
             
-            # Save the new data temporarily so we can update the database if the user approves
-            st.session_state['ready_to_save'] = invoice_data
+            # Change st.dataframe to st.data_editor to make it editable!
+            edited_df = st.data_editor(
+                df.style.map(color_status, subset=['Status']), 
+                use_container_width=True,
+                disabled=["Item", "Last Paid Price", "Difference", "Status"], # Lock everything except the new price
+                hide_index=True
+            )
+            
+            # Save the EDITED table to the app's memory, along with the vendor name
+            st.session_state['pending_items'] = edited_df.to_dict('records')
+            st.session_state['pending_vendor'] = vendor_name
 
     except Exception as e:
-        st.error(f"An error occurred: {e}")
+        st.error(f"Something went wrong: {e}")
 
-# 4. The "Memory" Button
-if 'ready_to_save' in st.session_state:
-    st.warning("Please review the prices above. If everything looks correct, save them to the database for next time.")
-    if st.button("💾 Save New Prices to Database"):
-        # Clean the vendor name again
-        vendor_name = st.session_state['ready_to_save']["Vendor_Name"].replace("/", "-")
-        with st.spinner("Saving to enterprise database..."):
-            for item in st.session_state['ready_to_save']["Items"]:
-                # Clean the item name again
-                item_name = item["Item_Name"].replace("/", "-")
-                new_price = float(item["New_Price"])
+# --- 4. THE SAVE BUTTON (PERMANENT MEMORY) ---
+if 'pending_items' in st.session_state:
+    st.divider()
+    st.warning("Review the prices above. Clicking save will update your database for future comparisons.")
+    
+    if st.button("💾 Save Verified Prices to Database"):
+        v_name = st.session_state['pending_vendor']
+        items_to_save = st.session_state['pending_items']
+        
+        with st.spinner(f"Saving {len(items_to_save)} items..."):
+            for row in items_to_save:
+                # Grab the data directly from the edited table rows
+                i_name = row["Item"]
+                # This ensures we save your typed correction, not the AI's original guess
+                n_price = float(row["New Invoice Price"]) 
                 
-                doc_id = f"{vendor_name}_{item_name}"
-                db.collection("vendor_prices").document(doc_id).set({
-                    "vendor": vendor_name,
-                    "item": item_name,
-                    "last_price": new_price
+                # Write to Firestore
+                db.collection("vendor_prices").document(f"{v_name}_{i_name}").set({
+                    "vendor": v_name,
+                    "item": i_name,
+                    "last_price": n_price
                 })
-        st.success("Prices securely saved! The app will remember these for the next invoice.")
-        del st.session_state['ready_to_save'] # Clear the state
+                
+        st.success(f"Prices for {v_name} have been updated successfully!")
+        
+        # Clear the memory so it doesn't show the button again
+        del st.session_state['pending_items']
+        del st.session_state['pending_vendor']
