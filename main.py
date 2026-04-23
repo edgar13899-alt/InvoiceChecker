@@ -115,47 +115,48 @@ if st.button("Process Invoice") and invoice_file:
                     "Status": status
                 })
             
-            # --- DISPLAY RESULTS (INTERACTIVE) ---
-            df = pd.DataFrame(comparison_results)
-            
-            def color_status(val):
-                if val == 'Increased': return 'background-color: #ffcccc'
-                if val == 'Decreased': return 'background-color: #ccffcc'
-                if val == 'New Item': return 'background-color: #ffffcc'
-                return ''
-
-            st.markdown("### 📝 Review and Edit")
-            st.info("If a price is incorrect due to a vendor change or AI error, click the number in the 'New Invoice Price' column to fix it before saving.")
-            
-            # Change st.dataframe to st.data_editor to make it editable!
-            edited_df = st.data_editor(
-                df.style.map(color_status, subset=['Status']), 
-                use_container_width=True,
-                disabled=["Item", "Last Paid Price", "Difference", "Status"], # Lock everything except the new price
-                hide_index=True
-            )
-            
-            # Save the EDITED table to the app's memory, along with the vendor name
-            st.session_state['pending_items'] = edited_df.to_dict('records')
+            # --- DISPLAY PREPARATION ---
+            # Instead of showing the table here, we just save the raw data to memory
+            st.session_state['raw_comparison'] = comparison_results
             st.session_state['pending_vendor'] = vendor_name
 
     except Exception as e:
         st.error(f"Something went wrong: {e}")
 
-# --- 4. THE SAVE BUTTON (PERMANENT MEMORY) ---
-if 'pending_items' in st.session_state:
+# --- 4. THE INTERACTIVE TABLE & SAVE BUTTON ---
+# Because this is OUTSIDE the "Process" button, it won't disappear when edited!
+if 'raw_comparison' in st.session_state:
     st.divider()
+    st.subheader(f"🏢 Vendor: {st.session_state['pending_vendor']}")
+    st.markdown("### 📝 Review and Edit")
+    st.info("If a price is incorrect due to a vendor change or AI error, click the number in the 'New Invoice Price' column to fix it.")
+    
+    df = pd.DataFrame(st.session_state['raw_comparison'])
+    
+    def color_status(val):
+        if val == 'Increased': return 'background-color: #ffcccc'
+        if val == 'Decreased': return 'background-color: #ccffcc'
+        if val == 'New Item': return 'background-color: #ffffcc'
+        return ''
+
+    # Show the editable table
+    edited_df = st.data_editor(
+        df.style.map(color_status, subset=['Status']), 
+        use_container_width=True,
+        disabled=["Item", "Last Paid Price", "Difference", "Status"], # Lock everything except new price
+        hide_index=True
+    )
+
     st.warning("Review the prices above. Clicking save will update your database for future comparisons.")
     
     if st.button("💾 Save Verified Prices to Database"):
         v_name = st.session_state['pending_vendor']
-        items_to_save = st.session_state['pending_items']
+        # Grab the data directly from the edited table so your changes are saved
+        items_to_save = edited_df.to_dict('records') 
         
         with st.spinner(f"Saving {len(items_to_save)} items..."):
             for row in items_to_save:
-                # Grab the data directly from the edited table rows
                 i_name = row["Item"]
-                # This ensures we save your typed correction, not the AI's original guess
                 n_price = float(row["New Invoice Price"]) 
                 
                 # Write to Firestore
@@ -167,6 +168,6 @@ if 'pending_items' in st.session_state:
                 
         st.success(f"Prices for {v_name} have been updated successfully!")
         
-        # Clear the memory so it doesn't show the button again
-        del st.session_state['pending_items']
+        # Clear the memory so the screen resets for the next invoice
+        del st.session_state['raw_comparison']
         del st.session_state['pending_vendor']
