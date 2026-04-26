@@ -58,7 +58,8 @@ if st.button("Process Invoice") and invoice_file:
             'gemini-3.1-pro-preview',
             generation_config=GenerationConfig(
                 response_mime_type="application/json",
-                response_schema=response_schema
+                response_schema=response_schema,
+                temperature=0.0
             )
         )
         
